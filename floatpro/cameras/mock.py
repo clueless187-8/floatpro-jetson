@@ -62,15 +62,43 @@ class MockCamera(Camera):
         y = int(H * 0.3 + 300 * np.sin(np.pi * (t % 2.0) / 2.0))
         y = max(20, min(H - 20, y))
 
-        # Draw "ball" with a rotating pattern so spin-detection tests
-        # have something to latch onto
-        cv2.circle(frame, (x, y), 18, 255, -1)
-        angle = (self._frame_i * 7) % 360  # simulated spin
-        for i in range(3):
-            rad = np.deg2rad(angle + i * 120)
-            px = int(x + 12 * np.cos(rad))
-            py = int(y + 12 * np.sin(rad))
-            cv2.circle(frame, (px, py), 3, 100, -1)
+        # Simulated ball: bright disc with an ASYMMETRIC seam pattern that
+        # rotates with the spin. Asymmetry matters because rotationally
+        # symmetric patterns (e.g. 3 evenly spaced lines with 120° symmetry)
+        # make phase correlation pick the smallest-magnitude rotation
+        # equivalent modulo the symmetry period, which creates aliasing.
+        R = 30
+        cv2.circle(frame, (x, y), R, 255, -1)
+        angle_deg = (self._frame_i * 7) % 360  # ground-truth spin rate
+
+        def rot(px, py, angle_d):
+            """Rotate point around origin by angle_d degrees."""
+            a = np.deg2rad(angle_d)
+            return (px * np.cos(a) - py * np.sin(a),
+                    px * np.sin(a) + py * np.cos(a))
+
+        # Pattern defined in ball-local coordinates (relative to center, 0°)
+        # then rotated by the ball's current spin angle and translated to
+        # the ball's screen position. No rotational symmetry anywhere.
+        strokes = [
+            # One long curved seam from upper-left to lower-right
+            [(-R * 0.9, -R * 0.3), (-R * 0.3, -R * 0.2),
+             (R * 0.2, R * 0.1), (R * 0.7, R * 0.5)],
+            # A short arc on the upper right
+            [(R * 0.2, -R * 0.7), (R * 0.5, -R * 0.5), (R * 0.7, -R * 0.2)],
+            # A dot on the lower left
+        ]
+        for stroke in strokes:
+            pts = []
+            for (sx, sy) in stroke:
+                rx, ry = rot(sx, sy, angle_deg)
+                pts.append((int(x + rx), int(y + ry)))
+            for i in range(len(pts) - 1):
+                cv2.line(frame, pts[i], pts[i + 1], 50, 3)
+
+        # Asymmetric dot: the key anti-symmetry feature
+        dot_x, dot_y = rot(-R * 0.5, R * 0.6, angle_deg)
+        cv2.circle(frame, (int(x + dot_x), int(y + dot_y)), 5, 30, -1)
 
         # Court line for homography testing
         cv2.line(frame, (0, int(H * 0.9)), (W, int(H * 0.9)), 180, 2)
