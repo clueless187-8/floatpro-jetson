@@ -2,16 +2,20 @@
 """
 FloatPro camera smoke test.
 
-Run this FIRST after installing the Arducam driver. It verifies:
-  1. v4l2 sees the camera
-  2. Arducam driver reports expected resolution + framerate
-  3. OpenCV was built with GStreamer support
-  4. The pipeline actually delivers ~120fps with no frame drops
-  5. Frame content is not blank / solid-color (driver is live)
+Usage:
+    python3 check_camera.py --backend ov9281
+    python3 check_camera.py --backend ar0234
+    python3 check_camera.py --backend flir
+    python3 check_camera.py --backend basler
+    python3 check_camera.py --backend mock
 
-If all five pass, you're ready to run capture.py.
+Verifies the selected backend can stream at its preset framerate with
+no drops and produces non-blank frames. Run this first after installing
+a driver, before running capture.py.
 """
+from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import time
@@ -20,6 +24,8 @@ from statistics import mean, stdev
 import cv2
 import numpy as np
 
+from floatpro.cameras import PRESETS, available_backends, make_camera
+
 
 def header(title):
     print("\n" + "=" * 60)
@@ -27,8 +33,10 @@ def header(title):
     print("=" * 60)
 
 
-def check_v4l2_devices():
-    header("1. V4L2 devices")
+def check_v4l2_devices(required):
+    if not required:
+        print("  (skipped — backend doesn't use v4l2)")
+        return True
     try:
         r = subprocess.run(["v4l2-ctl", "--list-devices"],
                            capture_output=True, text=True, timeout=5)
@@ -38,28 +46,14 @@ def check_v4l2_devices():
             return False
         return True
     except FileNotFoundError:
-        print("FAIL: v4l2-ctl not installed. Run: sudo apt install v4l-utils")
+        print("FAIL: v4l2-ctl not installed. sudo apt install v4l-utils")
         return False
 
 
-def check_formats(device="/dev/video0"):
-    header(f"2. Supported formats on {device}")
-    try:
-        r = subprocess.run(["v4l2-ctl", "-d", device, "--list-formats-ext"],
-                           capture_output=True, text=True, timeout=5)
-        print(r.stdout or "(no output)")
-        # Sanity-check we can see a 120fps mode
-        ok = "120" in r.stdout and ("1280" in r.stdout or "GREY" in r.stdout.upper())
-        if not ok:
-            print("WARN: did not see 120fps @ 1280x800 in format list")
+def check_opencv_gstreamer(required):
+    if not required:
+        print("  (skipped — backend doesn't use GStreamer)")
         return True
-    except Exception as e:
-        print(f"FAIL: {e}")
-        return False
-
-
-def check_opencv_gstreamer():
-    header("3. OpenCV GStreamer support")
     info = cv2.getBuildInformation()
     gst_line = [l for l in info.split("\n") if "GStreamer" in l]
     for l in gst_line:
@@ -67,41 +61,63 @@ def check_opencv_gstreamer():
     ok = any("YES" in l for l in gst_line)
     if not ok:
         print("FAIL: OpenCV was built without GStreamer.")
-        print("  On Jetson, use the system package: sudo apt install python3-opencv")
-        print("  (pip's opencv-python wheels lack GStreamer on ARM64)")
+        print("  On Jetson: sudo apt install python3-opencv  "
+              "(don't use pip opencv-python on ARM64)")
     return ok
 
 
-def check_framerate(pipeline, target_fps=120, n_frames=300):
-    header(f"4. Framerate test — target {target_fps}fps over {n_frames} frames")
-    print(f"Pipeline: {pipeline}\n")
+def check_sdk_available(backend):
+    avail = available_backends()
+    ok = avail.get(backend, False)
+    if ok:
+        print(f"  [{backend}] backend constructor available")
+    else:
+        print(f"FAIL: [{backend}] backend not importable")
+        if backend == "flir":
+            print("  Install Spinnaker SDK + PySpin from flir.com")
+        elif backend == "basler":
+            print("  Install Pylon SDK + pypylon: pip install pypylon")
+    return ok
 
-    cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-    if not cap.isOpened():
-        print("FAIL: could not open pipeline")
+
+def check_framerate(backend, n_frames=300):
+    preset = PRESETS[backend]
+    target_fps = preset.fps
+    print(f"Target {target_fps}fps over {n_frames} frames")
+    print(f"Preset: {preset.width}x{preset.height} pix={preset.pixel_format}\n")
+
+    cam = make_camera(backend, preset)
+    try:
+        info = cam.start()
+    except Exception as e:
+        print(f"FAIL: could not start camera: {e}")
         return False, None
 
-    # warmup — the first dozen frames are often slower as the pipeline primes
+    print(f"Started: {info.model} sn={info.serial}")
+
+    # Warmup — first frames are often slower as pipeline primes
     for _ in range(30):
-        cap.read()
+        cam.read()
 
     intervals = []
-    last_t = time.time()
+    last_t = time.monotonic()
     received = 0
-    t0 = time.time()
+    t0 = time.monotonic()
     for _ in range(n_frames):
-        ret, frame = cap.read()
-        now = time.time()
-        if ret:
+        ok, frame, ts = cam.read()
+        now = time.monotonic()
+        if ok:
             received += 1
             intervals.append(now - last_t)
         last_t = now
-    elapsed = time.time() - t0
-    cap.release()
+    elapsed = time.monotonic() - t0
+
+    last_frame = frame
+    cam.stop()
 
     if received < n_frames * 0.9:
         print(f"FAIL: only got {received}/{n_frames} frames")
-        return False, None
+        return False, last_frame
 
     measured_fps = received / elapsed
     avg_ms = 1000 * mean(intervals)
@@ -115,21 +131,19 @@ def check_framerate(pipeline, target_fps=120, n_frames=300):
     print(f"  Interval stdev : {sd_ms:.2f}ms")
     print(f"  Interval max   : {max_ms:.2f}ms")
 
-    pass_fps = measured_fps >= target_fps * 0.9
-    if not pass_fps:
-        print(f"WARN: measured fps well below target. Possible causes:")
-        print("  - appsink draining too slowly (Python processing behind)")
-        print("  - USB-2 hub in path (use direct CSI cable)")
-        print("  - Power mode not maxed: sudo nvpmodel -m 0 && sudo jetson_clocks")
-    return pass_fps, frame
+    ok = measured_fps >= target_fps * 0.9
+    if not ok:
+        print("WARN: measured fps well below target.")
+        print("  - Orin Nano not in max perf mode?  sudo nvpmodel -m 0 && sudo jetson_clocks")
+        print("  - USB-2 hub in path for industrial cam?  use direct USB3")
+        print("  - Python falling behind?  try --no-preview")
+    return ok, last_frame
 
 
 def check_frame_content(frame):
-    header("5. Frame content sanity")
     if frame is None:
         print("FAIL: no frame available")
         return False
-    h, w = frame.shape[:2]
     mean_v = float(np.mean(frame))
     std_v = float(np.std(frame))
     print(f"  Shape        : {frame.shape}")
@@ -141,24 +155,35 @@ def check_frame_content(frame):
         print("FAIL: frame looks blank / solid color. Check lens cap & lighting.")
         return False
     if mean_v < 5 or mean_v > 250:
-        print("WARN: exposure extreme — add/remove light, or tune sensor gain")
+        print("WARN: exposure extreme — tune --exposure / --gain")
     return True
 
 
 def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--backend", required=True,
+                   choices=["ov9281", "ar0234", "flir", "basler", "mock"])
+    args = p.parse_args()
+
+    uses_v4l2 = args.backend in ("ov9281", "ar0234")
+    uses_gstreamer = args.backend in ("ov9281", "ar0234")
+
     checks = []
 
-    checks.append(("v4l2 devices", check_v4l2_devices()))
-    checks.append(("camera formats", check_formats()))
-    checks.append(("OpenCV GStreamer", check_opencv_gstreamer()))
+    header("1. SDK / backend importable")
+    checks.append(("backend available", check_sdk_available(args.backend)))
 
-    pipeline = (
-        "v4l2src device=/dev/video0 ! "
-        "video/x-raw,format=GRAY8,width=1280,height=800,framerate=120/1 ! "
-        "videoconvert ! appsink drop=1 max-buffers=2 sync=false"
-    )
-    ok_fps, last_frame = check_framerate(pipeline, target_fps=120)
-    checks.append(("120fps stream", ok_fps))
+    header("2. v4l2 devices")
+    checks.append(("v4l2 devices", check_v4l2_devices(uses_v4l2)))
+
+    header("3. OpenCV GStreamer support")
+    checks.append(("OpenCV GStreamer", check_opencv_gstreamer(uses_gstreamer)))
+
+    header(f"4. Framerate test — {args.backend}")
+    ok_fps, last_frame = check_framerate(args.backend)
+    checks.append(("framerate", ok_fps))
+
+    header("5. Frame content sanity")
     checks.append(("frame content", check_frame_content(last_frame)))
 
     header("SUMMARY")
@@ -169,10 +194,11 @@ def main():
     all_ok = all(ok for _, ok in checks)
     print()
     if all_ok:
-        print("All checks passed. Run: python3 capture.py")
+        print(f"All checks passed for [{args.backend}]. "
+              f"Run: python3 capture.py --backend {args.backend}")
         sys.exit(0)
     else:
-        print("One or more checks failed. Fix before running capture.py")
+        print(f"One or more checks failed for [{args.backend}].")
         sys.exit(1)
 
 

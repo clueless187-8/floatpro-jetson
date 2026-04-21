@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "floatpro"
+version = "0.2.0"
+description = "Volleyball FloatPro — Jetson-based serve analysis pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "clueless187-8" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video :: Capture",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+# NOTE: opencv / numpy intentionally NOT listed as hard deps.
+# On Jetson you must use the system python3-opencv (apt) because
+# pip's ARM64 wheels are built without GStreamer support. Declaring
+# them as pip deps would override the system install and break CSI
+# capture silently. On a dev laptop, install them manually:
+#     pip install opencv-python numpy
+dependencies = []
+
+[project.optional-dependencies]
+# Industrial cameras have vendor SDKs that cannot be resolved from PyPI:
+#   flir   → download Spinnaker SDK from flir.com, then install their PySpin wheel
+#   basler → download Pylon SDK from baslerweb.com, then: pip install pypylon
+# Only `basler` has a pip-installable binding. `flir` is listed here for
+# documentation purposes only; it'll fail to resolve from PyPI.
+basler = ["pypylon>=3.0"]
+dev = ["pytest>=7.0", "ruff>=0.1"]
+
+[project.scripts]
+floatpro-capture = "capture:main"
+floatpro-check = "check_camera:main"
+
+[tool.setuptools.packages.find]
+include = ["floatpro*"]
+exclude = ["captures*", "tests*", "__pycache__*"]

@@ -1,6 +1,9 @@
 captures/
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
 .vscode/
 .idea/
 *.swp
