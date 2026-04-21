@@ -217,6 +217,7 @@ floatpro-jetson/
 ├── setup.sh                # apt deps + Jetson perf mode
 ├── check_camera.py         # backend-aware smoke test
 ├── capture.py              # CLI app: ring buffer + SPACE to save
+├── ingest_video.py         # import MP4/MOV → captures/ layout
 ├── floatpro/
 │   ├── __init__.py
 │   ├── ring_buffer.py      # threaded ring buffer, camera-agnostic
@@ -254,6 +255,41 @@ python3 -m floatpro.server --port 8080
 The dashboard lists captured sessions, runs spin estimation on demand,
 and lets you scrub through annotated frames. Wire a Cloudflare Tunnel in
 front of it (see below) to make it reachable from anywhere.
+
+## Ingesting phone / camera video
+
+`ingest_video.py` converts any MP4/MOV/AVI into the same `captures/`
+layout the rest of the pipeline consumes. This is the fastest path to
+validate the spin estimator on real-world footage before committing to
+hardware.
+
+```bash
+# Quick-look: probe the video + sample 5 frames for detection
+python3 ingest_video.py serve.mp4 --preview
+
+# Ingest the whole clip
+python3 ingest_video.py serve.mp4
+
+# Trim + downscale 4K → 1080p + analyze in one pass
+python3 ingest_video.py serve.mp4 --start 2.5 --end 5.0 --scale 0.5 --analyze
+
+# Override the FPS when phone metadata lies (common on slow-mo modes)
+python3 ingest_video.py serve.mp4 --fps 240
+```
+
+The ingested session appears in the dashboard at `http://localhost:8080`
+like any other capture. You can scrub frames, run analysis, and fetch
+results through the same API. Metadata carries a `source.type =
+video_file` tag so downstream tools can tell it apart from live
+hardware captures.
+
+Tips for phone footage:
+
+- **Side view** gives velocity + contact height in one frame
+- **Landscape orientation**, 1080p minimum, 240fps if the phone supports it
+- **Bright ball, dark backdrop** — a gym floor works; a bleacher crowd does not
+- **Lock exposure** if your phone allows it — auto-exposure mid-flight smears the ball
+- **Short clips (3–5 s)** keep extracted frame count manageable; trim with `--start` / `--end`
 
 Routes:
 
