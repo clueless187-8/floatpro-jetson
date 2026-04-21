@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FloatPro Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e;
+    --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont,
+         "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--border);
+           display: flex; justify-content: space-between; align-items: center; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--accent); }
+  .status { font-size: 12px; color: var(--muted); }
+  .status.ok::before { content: "●"; color: var(--good); margin-right: 4px; }
+  .status.bad::before { content: "●"; color: var(--bad); margin-right: 4px; }
+  main { padding: 24px; display: grid; grid-template-columns: 300px 1fr; gap: 24px; }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 6px; padding: 16px; }
+  .panel h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase;
+              letter-spacing: 0.5px; color: var(--muted); }
+  .session { padding: 10px 12px; border: 1px solid var(--border);
+             border-radius: 4px; margin-bottom: 8px; cursor: pointer;
+             transition: background 0.1s; }
+  .session:hover { background: #21262d; }
+  .session.active { background: #1f6feb22; border-color: var(--accent); }
+  .session .id { font-family: ui-monospace, monospace; font-size: 12px; }
+  .session .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .metric { display: flex; justify-content: space-between; padding: 10px 0;
+            border-bottom: 1px solid var(--border); }
+  .metric:last-child { border-bottom: none; }
+  .metric .label { color: var(--muted); }
+  .metric .value { font-family: ui-monospace, monospace; font-weight: 600; }
+  .metric .value.big { font-size: 32px; color: var(--accent); }
+  button { background: var(--accent); color: #fff; border: none; padding: 8px 16px;
+           border-radius: 4px; font-size: 13px; cursor: pointer; font-weight: 500; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .frame-viewer { text-align: center; }
+  .frame-viewer img { max-width: 100%; border: 1px solid var(--border); border-radius: 4px; }
+  .scrubber { width: 100%; margin-top: 12px; }
+  .empty { color: var(--muted); font-style: italic; text-align: center; padding: 40px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FloatPro</h1>
+  <div id="server-status" class="status">checking…</div>
+</header>
+
+<main>
+  <aside class="panel">
+    <h2>Sessions</h2>
+    <div id="sessions-list"><div class="empty">Loading…</div></div>
+  </aside>
+
+  <section>
+    <div class="panel">
+      <h2>Analysis</h2>
+      <div id="analysis-view"><div class="empty">Select a session on the left</div></div>
+    </div>
+
+    <div class="panel" style="margin-top: 16px;">
+      <h2>Frame viewer</h2>
+      <div id="frame-view"><div class="empty">No frame selected</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const API = location.origin;  // served from same origin as the API
+let selected = null;
+
+async function fetchStatus() {
+  const el = document.getElementById("server-status");
+  try {
+    const r = await fetch(`${API}/health`);
+    const j = await r.json();
+    el.className = "status ok";
+    el.textContent = "connected";
+  } catch (e) {
+    el.className = "status bad";
+    el.textContent = "disconnected";
+  }
+}
+
+async function fetchSessions() {
+  const el = document.getElementById("sessions-list");
+  try {
+    const r = await fetch(`${API}/api/sessions`);
+    const j = await r.json();
+    if (!j.sessions.length) {
+      el.innerHTML = '<div class="empty">No sessions yet.<br>Run capture.py and press SPACE.</div>';
+      return;
+    }
+    el.innerHTML = j.sessions.map(s => `
+      <div class="session${selected === s.id ? ' active' : ''}" data-id="${s.id}">
+        <div class="id">${s.id}</div>
+        <div class="meta">${s.frame_count} frames · ${s.fps?.toFixed?.(1) ?? '?'} fps
+          · ${s.analyzed ? '✓ analyzed' : 'not analyzed'}</div>
+      </div>
+    `).join("");
+    el.querySelectorAll(".session").forEach(div => {
+      div.onclick = () => selectSession(div.dataset.id);
+    });
+  } catch (e) {
+    el.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+  }
+}
+
+async function selectSession(id) {
+  selected = id;
+  await fetchSessions();  // re-render to highlight
+  const view = document.getElementById("analysis-view");
+  view.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const meta = await (await fetch(`${API}/api/sessions/${id}`)).json();
+
+    // Try to get cached result; else show an "Analyze" button
+    let result = null;
+    try {
+      result = await (await fetch(`${API}/api/sessions/${id}/result`)).json();
+    } catch (_) {}
+
+    if (!result) {
+      view.innerHTML = `
+        <div class="metric"><span class="label">Frames</span>
+          <span class="value">${meta.frame_count}</span></div>
+        <div class="metric"><span class="label">Camera</span>
+          <span class="value">${meta.camera?.model ?? '?'}</span></div>
+        <div class="metric"><span class="label">Effective FPS</span>
+          <span class="value">${meta.timing?.effective_fps ?? '?'}</span></div>
+        <div style="margin-top: 16px;">
+          <button id="analyze-btn">Analyze spin</button>
+        </div>`;
+      document.getElementById("analyze-btn").onclick = async () => {
+        const btn = document.getElementById("analyze-btn");
+        btn.disabled = true; btn.textContent = "Analyzing…";
+        try {
+          await fetch(`${API}/api/sessions/${id}/analyze`, {method: "POST"});
+          selectSession(id);  // reload to show results
+        } catch (e) {
+          btn.textContent = "Error: " + e.message;
+        }
+      };
+      return;
+    }
+
+    view.innerHTML = `
+      <div class="metric">
+        <span class="label">Spin</span>
+        <span class="value big">${result.rpm?.toFixed(0) ?? '–'} RPM</span>
+      </div>
+      <div class="metric">
+        <span class="label">Direction</span>
+        <span class="value">${result.direction ?? '–'}</span>
+      </div>
+      <div class="metric">
+        <span class="label">Variability (MAD)</span>
+        <span class="value">±${result.rpm_std?.toFixed(1) ?? '–'} RPM</span>
+      </div>
+      <div class="metric">
+        <span class="label">Method</span>
+        <span class="value">${result.method}</span>
+      </div>
+      <div class="metric">
+        <span class="label">Valid frame pairs</span>
+        <span class="value">${result.n_valid_pairs} / ${result.n_frames - 1}</span>
+      </div>
+      ${result.notes?.length ? `
+      <div style="margin-top: 12px; padding: 8px; background: #0d1117;
+                  border-radius: 4px; font-family: ui-monospace, monospace;
+                  font-size: 11px; color: var(--muted);">
+        ${result.notes.join("<br>")}
+      </div>` : ""}
+    `;
+
+    showFrame(id, 0, meta.frame_count);
+
+  } catch (e) {
+    view.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+  }
+}
+
+function showFrame(id, n, total) {
+  const el = document.getElementById("frame-view");
+  el.innerHTML = `
+    <div class="frame-viewer">
+      <img id="frame-img" src="${API}/api/sessions/${id}/frames/${n}/annotated" alt="frame ${n}">
+      <input type="range" id="scrub" class="scrubber"
+             min="0" max="${total - 1}" value="${n}">
+      <div style="color: var(--muted); font-size: 12px; margin-top: 6px;">
+        Frame <span id="frame-n">${n}</span> / ${total - 1}
+      </div>
+    </div>
+  `;
+  document.getElementById("scrub").oninput = (e) => {
+    const v = parseInt(e.target.value);
+    document.getElementById("frame-n").textContent = v;
+    document.getElementById("frame-img").src =
+      `${API}/api/sessions/${id}/frames/${v}/annotated`;
+  };
+}
+
+fetchStatus();
+fetchSessions();
+setInterval(fetchStatus, 10000);
+</script>
+</body>
+</html>

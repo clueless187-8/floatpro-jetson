@@ -34,6 +34,8 @@ dependencies = []
 # Only `basler` has a pip-installable binding. `flir` is listed here for
 # documentation purposes only; it'll fail to resolve from PyPI.
 basler = ["pypylon>=3.0"]
+# FastAPI server + dashboard
+server = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
 dev = ["pytest>=7.0", "ruff>=0.1"]
 
 [project.scripts]
@@ -43,3 +45,6 @@ floatpro-check = "check_camera:main"
 [tool.setuptools.packages.find]
 include = ["floatpro*"]
 exclude = ["captures*", "tests*", "__pycache__*"]
+
+[tool.setuptools.package-data]
+floatpro = ["static/*.html", "static/*.css", "static/*.js"]

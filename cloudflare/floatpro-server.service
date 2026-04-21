@@ -1,0 +1,34 @@
+# FloatPro FastAPI server — systemd unit
+#
+# Install:
+#   sudo cp cloudflare/floatpro-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable floatpro-server
+#   sudo systemctl start floatpro-server
+#   sudo systemctl status floatpro-server
+#
+# Edit the User= and WorkingDirectory= lines below if your clone lives
+# elsewhere. The default assumes /home/tucker/floatpro-jetson.
+
+[Unit]
+Description=FloatPro FastAPI server
+After=network.target
+
+[Service]
+Type=simple
+User=tucker
+WorkingDirectory=/home/tucker/floatpro-jetson
+ExecStart=/usr/bin/python3 -m floatpro.server --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5s
+
+# Resource ceiling so a rogue analysis doesn't eat the whole Jetson.
+# 4 GiB is comfortable headroom for spin estimation on a 600-frame session.
+MemoryMax=4G
+
+# Journal all output
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

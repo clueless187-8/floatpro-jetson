@@ -1,0 +1,34 @@
+# FloatPro — cloudflared tunnel config template
+#
+# Copy this to ~/.cloudflared/config.yml on the Jetson and fill in:
+#   - <TUNNEL-UUID>   (from `cloudflared tunnel create floatpro-jetson`)
+#   - <YOUR-HOSTNAME> (from `cloudflared tunnel route dns floatpro-jetson <host>`)
+#
+# Full setup walkthrough: see cloudflare/README.md
+
+tunnel: <TUNNEL-UUID>
+credentials-file: /home/<USER>/.cloudflared/<TUNNEL-UUID>.json
+
+# Optional: write logs to a file we can tail remotely
+logfile: /var/log/cloudflared.log
+loglevel: info
+
+# Keep only a few warm connections on the Jetson — we don't need a full mesh
+# and limiting idle connections saves a bit of RAM.
+warp-routing:
+  enabled: false
+
+ingress:
+  # Public hostname → local FastAPI server on the Jetson
+  - hostname: <YOUR-HOSTNAME>
+    service: http://localhost:8080
+    originRequest:
+      # Longer timeouts to accommodate POST /analyze on big sessions
+      # (spin estimation on 600 frames takes ~5-10s on Orin Nano)
+      connectTimeout: 30s
+      tlsTimeout: 10s
+      noHappyEyeballs: true
+      httpHostHeader: floatpro-jetson.local
+
+  # Catch-all — required. Returns 404 for anything that doesn't match above.
+  - service: http_status:404

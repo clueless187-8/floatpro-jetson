@@ -213,13 +213,17 @@ moving to the ML stage — spin estimation assumes uniform sampling.
 ```
 floatpro-jetson/
 ├── README.md
-├── pyproject.toml          # pip install -e .
+├── pyproject.toml          # pip install -e .  (extras: [server], [basler])
 ├── setup.sh                # apt deps + Jetson perf mode
 ├── check_camera.py         # backend-aware smoke test
 ├── capture.py              # CLI app: ring buffer + SPACE to save
 ├── floatpro/
 │   ├── __init__.py
 │   ├── ring_buffer.py      # threaded ring buffer, camera-agnostic
+│   ├── spin_estimator.py   # ORB + RANSAC primary, log-polar fallback
+│   ├── server.py           # FastAPI: sessions, analyze, frames, dashboard
+│   ├── static/
+│   │   └── dashboard.html  # single-file browser UI
 │   └── cameras/
 │       ├── __init__.py     # factory: make_camera() + available_backends()
 │       ├── base.py         # Camera ABC, CameraConfig, CameraInfo
@@ -227,8 +231,42 @@ floatpro-jetson/
 │       ├── ar0234.py       # Arducam AR0234 via GStreamer
 │       ├── flir_spinnaker.py   # FLIR Blackfly S via PySpin
 │       ├── basler_pylon.py     # Basler ace via pypylon
-│       └── mock.py         # Synthetic, no hardware
+│       └── mock.py         # synthetic, no hardware
+├── cloudflare/
+│   ├── README.md           # tunnel setup walkthrough
+│   ├── config.yml.template # cloudflared ingress config
+│   └── floatpro-server.service  # systemd unit for the API server
+├── tests/
+│   ├── test_spin_estimator.py   # validates against mock ground truth
+│   ├── test_server.py           # end-to-end API integration test
+│   └── debug_*.py               # diagnostic scripts
 └── captures/               # session outputs (gitignored)
+```
+
+## Running the server
+
+```bash
+pip install -e '.[server]'
+python3 -m floatpro.server --port 8080
+# open http://localhost:8080 in a browser
+```
+
+The dashboard lists captured sessions, runs spin estimation on demand,
+and lets you scrub through annotated frames. Wire a Cloudflare Tunnel in
+front of it (see below) to make it reachable from anywhere.
+
+Routes:
+
+```
+GET  /                                          # dashboard HTML
+GET  /health                                    # liveness check
+GET  /api/status                                # service info
+GET  /api/sessions                              # list all captures
+GET  /api/sessions/{id}                         # session metadata
+POST /api/sessions/{id}/analyze                 # run spin estimation
+GET  /api/sessions/{id}/result                  # cached analysis
+GET  /api/sessions/{id}/frames/{n}              # raw PNG
+GET  /api/sessions/{id}/frames/{n}/annotated    # PNG with overlay
 ```
 
 ## What's next (phase 2)
@@ -236,15 +274,41 @@ floatpro-jetson/
 Once the pipeline is validated on at least one real camera:
 
 1. Label ~500 frames of volleyball footage → YOLOv8n ball detector
+   (replaces `detect_ball_simple` in the spin estimator)
 2. Export to TensorRT for Jetson acceleration
-3. Run YOLO on each frame in the ring buffer; store bounding boxes in metadata
-4. Spin estimator — log-polar transform + phase correlation on ball crops
-5. Court homography calibration — 4-point tap → velocity + landing zones
-6. FastAPI dashboard over Tailscale for coach-side live view
+3. Court homography calibration — 4-point tap → velocity + landing zones
+4. Float-serve-specific metrics: break distance, Knuckle Index, toss
+   consistency
+5. React Native app reading from the same FastAPI server for in-gym use
 
-All of that slots into the same ring-buffer architecture. The save
-step becomes: "save frames + detections + spin + velocity" instead of
-just frames.
+## Remote access (Cloudflare Tunnel)
+
+The FastAPI server is designed to be fronted by
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+so coaches, parents, and remote collaborators can reach the Jetson at a
+public HTTPS hostname — with optional Zero Trust Access gating — without
+opening any inbound ports on your network.
+
+Full walkthrough: [`cloudflare/README.md`](cloudflare/README.md).
+
+Short version:
+
+```bash
+# On the Jetson
+curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb
+sudo dpkg -i cloudflared.deb
+cloudflared tunnel login
+cloudflared tunnel create floatpro-jetson
+cloudflared tunnel route dns floatpro-jetson floatpro.yourdomain.com
+cp cloudflare/config.yml.template ~/.cloudflared/config.yml
+# edit UUID / USER / HOSTNAME in the config
+sudo cloudflared --config ~/.cloudflared/config.yml service install
+sudo systemctl start cloudflared
+```
+
+Gate with Zero Trust Access from the Cloudflare dashboard (policy on
+the app hostname → allow specific emails or SSO). No auth code in the
+Python server — authentication happens at the Cloudflare edge.
 
 ## Adding a new camera
 
