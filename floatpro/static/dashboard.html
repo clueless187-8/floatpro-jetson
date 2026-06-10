@@ -152,26 +152,45 @@ async function selectSession(id) {
       return;
     }
 
+    const ki = result.knuckle_index;
+    const kiColor = ki == null ? 'var(--muted)'
+                  : ki >= 70 ? '#3fb950' : ki >= 40 ? '#d29922' : '#f85149';
     view.innerHTML = `
       <div class="metric">
+        <span class="label">Knuckle Index</span>
+        <span class="value big" style="color:${kiColor}">${ki?.toFixed(0) ?? '–'}</span>
+      </div>
+      <div class="metric">
+        <span class="label">Serve type</span>
+        <span class="value">${result.serve_type ?? '–'}</span>
+      </div>
+      <div class="metric">
+        <span class="label">Speed</span>
+        <span class="value">${result.speed_mph?.toFixed(1) ?? '–'} mph
+          <span style="color:var(--muted);font-weight:400">
+            (peak ${result.peak_speed_mph?.toFixed(1) ?? '–'})</span></span>
+      </div>
+      <div class="metric">
         <span class="label">Spin</span>
-        <span class="value big">${result.rpm?.toFixed(0) ?? '–'} RPM</span>
+        <span class="value">${result.rpm?.toFixed(0) ?? '–'} RPM
+          ${result.spin_direction ? `(${result.spin_direction})` : ''}</span>
       </div>
       <div class="metric">
-        <span class="label">Direction</span>
-        <span class="value">${result.direction ?? '–'}</span>
-      </div>
-      <div class="metric">
-        <span class="label">Variability (MAD)</span>
+        <span class="label">Spin variability (MAD)</span>
         <span class="value">±${result.rpm_std?.toFixed(1) ?? '–'} RPM</span>
       </div>
       <div class="metric">
-        <span class="label">Method</span>
-        <span class="value">${result.method}</span>
+        <span class="label">Break</span>
+        <span class="value">${result.break_in?.toFixed(1) ?? '–'} in</span>
       </div>
       <div class="metric">
-        <span class="label">Valid frame pairs</span>
-        <span class="value">${result.n_valid_pairs} / ${result.n_frames - 1}</span>
+        <span class="label">Wobble</span>
+        <span class="value">${result.wobble_px?.toFixed(2) ?? '–'} px</span>
+      </div>
+      <div class="metric">
+        <span class="label">Spin method / pairs</span>
+        <span class="value">${result.spin?.method ?? '–'}
+          · ${result.spin?.n_valid_pairs ?? '–'} / ${(result.spin?.n_frames ?? 1) - 1}</span>
       </div>
       ${result.notes?.length ? `
       <div style="margin-top: 12px; padding: 8px; background: #0d1117;

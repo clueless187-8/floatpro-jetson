@@ -305,17 +305,71 @@ GET  /api/sessions/{id}/frames/{n}              # raw PNG
 GET  /api/sessions/{id}/frames/{n}/annotated    # PNG with overlay
 ```
 
+## Serve metrics (analysis v2)
+
+`POST /analyze` (or `ingest_video.py --analyze`) runs the full pipeline
+in `floatpro/analysis.py` and reports:
+
+| Metric | How it's computed | Notes |
+|---|---|---|
+| **Spin (RPM)** | ORB feature matching + RANSAC rotation between consecutive ball patches, median + MAD aggregation | Validated 4.9–7.4% error vs mock ground truth |
+| **Speed (mph)** | Smoothed central-difference velocity, ball-diameter calibration (volleyball = 21 cm → meters/px from detected radius) | 0.0% error vs mock; no court points needed |
+| **Break (in)** | Max perpendicular deviation from the launch line (TLS fit on first 30% of flight) | v1 limitation: side view conflates gravity drop with aerodynamic break |
+| **Wobble (px)** | RMS second-difference of lateral offset | The knuckling signature — high-frequency direction changes a ballistic arc doesn't have |
+| **Knuckle Index** | `100·(speed_norm·spin_norm·move_norm)^(1/3)` — geometric mean of speed (sat. 50 mph), low-spin (0 at 120 RPM), and wobble (sat. 3 px) | 0–100 composite float quality; formula versioned in payload for re-scoring later |
+| **Serve type** | rpm < 60 → float · < 180 → jump_float/hybrid by speed · ≥ 180 → topspin | v1 heuristic |
+
+Calibration accuracy degrades if the ball moves significantly
+toward/away from the camera (radius CV > 15% triggers a warning note).
+Court-homography calibration is the phase-2 fix.
+
+## Windows quickstart (laptop analysis, no Jetson)
+
+The analysis pipeline runs anywhere Python does — useful for analyzing
+phone clips on a laptop before the camera hardware arrives.
+
+```powershell
+git clone https://github.com/clueless187-8/floatpro-jetson.git
+cd floatpro-jetson          # ← must run everything from the repo root
+
+python -m pip install opencv-python numpy fastapi "uvicorn[standard]" httpx
+python -m pip install -e .
+
+# Sanity check
+python -c "import cv2; print(cv2.__version__)"
+
+# Analyze a phone clip (drag the file into the terminal to paste its path)
+python ingest_video.py "C:\path\to\serve.mp4" --preview
+python ingest_video.py "C:\path\to\serve.mp4" --start 1.0 --end 4.0 --analyze
+
+# Dashboard
+python -m floatpro.server --port 8080   # → http://localhost:8080
+```
+
+Windows gotchas:
+- Use `python`, not `python3` (PowerShell's `python3` may open the
+  Microsoft Store).
+- Run from the repo root — `pip install -e .` and the scripts both
+  expect it.
+- `pyproject.toml` deliberately does **not** depend on OpenCV (Jetson
+  must use the apt build for GStreamer), so install `opencv-python`
+  explicitly as above.
+
 ## What's next (phase 2)
 
 Once the pipeline is validated on at least one real camera:
 
 1. Label ~500 frames of volleyball footage → YOLOv8n ball detector
-   (replaces `detect_ball_simple` in the spin estimator)
+   (replaces `detect_ball_simple`) — training harness scaffolded in
+   `ml/`, see `ml/README.md`
 2. Export to TensorRT for Jetson acceleration
-3. Court homography calibration — 4-point tap → velocity + landing zones
-4. Float-serve-specific metrics: break distance, Knuckle Index, toss
-   consistency
-5. React Native app reading from the same FastAPI server for in-gym use
+3. Court homography calibration — 4-point tap → landing zones +
+   depth-robust velocity (ball-diameter calibration already gives
+   velocity today)
+4. Rear-view or dual-camera capture to separate aerodynamic break from
+   gravity drop
+5. Toss-consistency tracking (pre-contact ball path)
+6. React Native app reading from the same FastAPI server for in-gym use
 
 ## Remote access (Cloudflare Tunnel)
 

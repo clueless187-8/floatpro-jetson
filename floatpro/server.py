@@ -36,7 +36,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from floatpro.spin_estimator import estimate_session_spin
+from floatpro.analysis import analyze_session as run_analysis
 from dataclasses import asdict
 
 
@@ -192,14 +192,11 @@ def analyze_session(session_id: str, force: bool = False):
     if not frames:
         raise HTTPException(500, "no frames could be loaded")
 
-    result = estimate_session_spin(frames, fps=float(fps))
-    # SpinResult has Detection objects; convert to dict form for JSON
-    payload = asdict(result)
-    # Strip full detections list from JSON response (keep count); cache on
-    # disk has the full list if needed for frontend overlay rendering.
-    cached_path.write_text(json.dumps(payload, indent=2, default=str))
-    slim = {k: v for k, v in payload.items() if k != "detections"}
-    slim["detection_count"] = sum(1 for x in payload.get("detections") or [] if x)
+    result = run_analysis(frames, fps=float(fps))
+    # Cache full payload (includes detections for overlay rendering)
+    cached_path.write_text(json.dumps(result, indent=2, default=str))
+    slim = {k: v for k, v in result.items() if k not in ("detections", "path")}
+    slim["detection_count"] = sum(1 for x in result.get("detections") or [] if x)
     return slim
 
 

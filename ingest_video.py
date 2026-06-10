@@ -243,8 +243,10 @@ def ingest(path: Path,
 
 
 def run_analysis(session_dir: Path) -> None:
-    """Run spin estimation right after ingest. Same code path as
+    """Run full analysis right after ingest. Same code path as
     POST /api/sessions/{id}/analyze."""
+    from floatpro.analysis import analyze_session
+
     meta = json.loads((session_dir / "metadata.json").read_text())
     fps = meta["timing"]["effective_fps"]
 
@@ -255,30 +257,36 @@ def run_analysis(session_dir: Path) -> None:
         if img is not None:
             frames.append(img)
 
-    print(f"Running spin estimation at {fps:.1f} fps...")
+    print(f"Running analysis at {fps:.1f} fps...")
     t0 = time.time()
-    result = estimate_session_spin(frames, fps=fps)
+    result = analyze_session(frames, fps=fps)
     elapsed = time.time() - t0
 
+    def fmt(v, spec=".1f", unit=""):
+        return f"{v:{spec}}{unit}" if v is not None else "—"
+
     print(f"\n{'='*50}")
-    print(f"  SPIN ANALYSIS")
+    print(f"  SERVE ANALYSIS  (v{result['analysis_version']})")
     print(f"{'='*50}")
-    if result.rpm is None:
-        print("  RPM: could not estimate")
-    else:
-        print(f"  RPM:           {result.rpm:.1f}")
-        print(f"  Direction:     {result.direction or '—'}")
-        print(f"  Variability:   ±{result.rpm_std:.1f} RPM (MAD)")
-        print(f"  Method:        {result.method}")
-    print(f"  Valid pairs:   {result.n_valid_pairs} / {result.n_frames - 1}")
+    print(f"  Knuckle Index: {fmt(result['knuckle_index'], '.0f')}")
+    print(f"  Serve type:    {result['serve_type'] or '—'}")
+    print(f"  Speed:         {fmt(result['speed_mph'])} mph "
+          f"(peak {fmt(result['peak_speed_mph'])})")
+    print(f"  Spin:          {fmt(result['rpm'])} RPM "
+          f"{result['spin_direction'] or ''} "
+          f"±{fmt(result['rpm_std'])} MAD")
+    print(f"  Break:         {fmt(result['break_in'])} in")
+    print(f"  Wobble:        {fmt(result['wobble_px'], '.2f')} px")
+    spin = result["spin"]
+    print(f"  Valid pairs:   {spin['n_valid_pairs']} / {spin['n_frames'] - 1}")
     print(f"  Analysis time: {elapsed:.1f}s")
     print(f"  Notes:")
-    for note in result.notes:
+    for note in result["notes"]:
         print(f"    - {note}")
 
     # Cache the result on disk (same filename the server uses)
     cache_path = session_dir / "spin_result.json"
-    cache_path.write_text(json.dumps(asdict(result), indent=2, default=str))
+    cache_path.write_text(json.dumps(result, indent=2, default=str))
     print(f"\nResult cached to {cache_path}")
 
 
